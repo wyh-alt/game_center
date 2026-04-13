@@ -15,12 +15,6 @@ from games.guess_number import GuessNumberInterface
 from games.idiom_solitaire import IdiomSolitaireInterface
 from games.draw_guess import DrawGuessInterface
 
-try:
-    import make_sounds
-    make_sounds.init_assets()
-except Exception as e:
-    print("Error init assets:", e)
-
 def get_resource_path(relative_path):
     if hasattr(sys, '_MEIPASS'):
         return os.path.join(sys._MEIPASS, relative_path)
@@ -52,7 +46,7 @@ class MainWindow(FluentWindow):
         self.bgm_player.setAudioOutput(self.audio_output)
         
         # 加载指定的BGM文件
-        bgm_path = get_resource_path("おはなばたけ~1.m4a")
+        bgm_path = get_resource_path("assets/BGM.wav")
         if os.path.exists(bgm_path):
             self.bgm_player.setSource(QUrl.fromLocalFile(bgm_path))
             self.bgm_player.setLoops(QMediaPlayer.Loops.Infinite) # 设置循环播放

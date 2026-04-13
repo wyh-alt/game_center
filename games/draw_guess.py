@@ -201,12 +201,7 @@ class DrawGuessInterface(QWidget):
 
     def play_sound(self, sound_type):
         import winsound
-        try:
-            import make_sounds
-            assets_dir = make_sounds.get_assets_dir()
-            sound_file = os.path.join(assets_dir, f"{sound_type}.wav")
-        except:
-            sound_file = get_resource_path(f"assets/{sound_type}.wav")
+        sound_file = get_resource_path(f"assets/{sound_type}.wav")
         if os.path.exists(sound_file):
             winsound.PlaySound(sound_file, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
 
