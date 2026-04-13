@@ -1,0 +1,353 @@
+import sys
+import os
+import base64
+from PyQt6.QtCore import Qt, QTimer, QPoint, QBuffer, QIODevice
+from PyQt6.QtGui import QPainter, QPen, QPixmap, QColor
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget
+from qfluentwidgets import SubtitleLabel, PrimaryPushButton, CardWidget, PushButton, TextEdit, LineEdit, ProgressBar
+
+def get_resource_path(relative_path):
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
+
+class DrawingBoard(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(500, 500)
+        self.pixmap = QPixmap(500, 500)
+        self.pixmap.fill(Qt.GlobalColor.white)
+        self.drawing = False
+        self.last_point = QPoint()
+        self.can_draw = False
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.drawPixmap(0, 0, self.pixmap)
+        
+        # 绘制边框
+        painter.setPen(QPen(Qt.GlobalColor.black, 1))
+        painter.drawRect(0, 0, 499, 499)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.can_draw:
+            self.drawing = True
+            self.last_point = event.pos()
+
+    def mouseMoveEvent(self, event):
+        if (event.buttons() & Qt.MouseButton.LeftButton) and self.drawing and self.can_draw:
+            painter = QPainter(self.pixmap)
+            painter.setPen(QPen(Qt.GlobalColor.black, 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            painter.drawLine(self.last_point, event.pos())
+            self.last_point = event.pos()
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.drawing = False
+
+    def clear_board(self):
+        self.pixmap.fill(Qt.GlobalColor.white)
+        self.update()
+
+    def get_image_data(self):
+        buffer = QBuffer()
+        buffer.open(QIODevice.OpenModeFlag.ReadWrite)
+        self.pixmap.save(buffer, "PNG")
+        return base64.b64encode(buffer.data()).decode('utf-8')
+
+    def set_image_data(self, b64_data):
+        img_data = base64.b64decode(b64_data)
+        self.pixmap.loadFromData(img_data, "PNG")
+        self.update()
+
+
+class DrawGuessInterface(QWidget):
+    def __init__(self, network, parent=None):
+        super().__init__(parent)
+        self.network = network
+        self.setObjectName("DrawGuessInterface")
+        
+        self.main_layout = QHBoxLayout(self)
+        
+        # Left: Board
+        self.board_card = CardWidget(self)
+        self.board_layout = QVBoxLayout(self.board_card)
+        
+        self.game_title = SubtitleLabel("你画我猜 (2-8人)", self)
+        self.game_status = SubtitleLabel("等待玩家加入...", self)
+        
+        self.timer_bar = ProgressBar(self)
+        self.timer_bar.setRange(0, 60)
+        self.timer_bar.setValue(60)
+        self.timer_bar.setTextVisible(True)
+        self.timer_bar.setFormat("倒计时: %v s")
+        self.timer_bar.setFixedHeight(20)
+        self.timer_bar.hide()
+        
+        self.board = DrawingBoard(self)
+        
+        self.tools_layout = QHBoxLayout()
+        self.clear_btn = PushButton("清空画板", self)
+        self.clear_btn.clicked.connect(self.board.clear_board)
+        self.submit_btn = PrimaryPushButton("提交画作", self)
+        self.submit_btn.clicked.connect(self.on_submit_drawing)
+        self.tools_layout.addWidget(self.clear_btn)
+        self.tools_layout.addWidget(self.submit_btn)
+        
+        self.board_layout.addWidget(self.game_title)
+        self.board_layout.addWidget(self.game_status)
+        self.board_layout.addWidget(self.timer_bar)
+        self.board_layout.addWidget(self.board)
+        self.board_layout.addLayout(self.tools_layout)
+        
+        self.main_layout.addWidget(self.board_card, 2)
+        
+        # Right: Panel
+        self.panel = CardWidget(self)
+        self.panel_layout = QVBoxLayout(self.panel)
+        
+        self.score_label = QLabel("计分板:", self)
+        self.score_label.setStyleSheet("font-size: 14px; font-weight: bold;")
+        self.score_list = QListWidget(self)
+        
+        self.chat_display = TextEdit(self)
+        self.chat_display.setReadOnly(True)
+        self.chat_display.setFixedHeight(200)
+        
+        self.chat_input_layout = QHBoxLayout()
+        self.chat_input = LineEdit(self)
+        self.chat_input.setPlaceholderText("输入猜测词语或消息...")
+        self.chat_input.returnPressed.connect(self.send_guess_or_chat)
+        self.send_btn = PrimaryPushButton("发送", self)
+        self.send_btn.clicked.connect(self.send_guess_or_chat)
+        self.chat_input_layout.addWidget(self.chat_input)
+        self.chat_input_layout.addWidget(self.send_btn)
+        
+        self.start_btn = PrimaryPushButton("开始游戏 (仅房主)", self)
+        self.start_btn.clicked.connect(self.on_start_game)
+        self.start_btn.hide()
+        
+        self.leave_btn = PushButton("离开房间", self)
+        self.leave_btn.clicked.connect(self.leave_room)
+        
+        self.panel_layout.addWidget(self.score_label)
+        self.panel_layout.addWidget(self.score_list)
+        self.panel_layout.addWidget(QLabel("猜测与聊天:"))
+        self.panel_layout.addWidget(self.chat_display)
+        self.panel_layout.addLayout(self.chat_input_layout)
+        self.panel_layout.addWidget(self.start_btn)
+        self.panel_layout.addWidget(self.leave_btn)
+        
+        self.main_layout.addWidget(self.panel, 1)
+        
+        self.network.message_received.connect(self.handle_network_message)
+        
+        self.room_info = {}
+        self.my_role = ""
+        self.is_drawer = False
+        self.game_phase = "waiting" # waiting, drawing, guessing
+        self.correct_guessers = []
+        
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.on_timer_tick)
+        self.time_left = 0
+
+    def reset_game(self):
+        self.timer.stop()
+        self.timer_bar.hide()
+        self.board.clear_board()
+        self.board.can_draw = False
+        self.clear_btn.setEnabled(False)
+        self.submit_btn.setEnabled(False)
+        self.chat_input.setEnabled(False)
+        self.send_btn.setEnabled(False)
+        self.game_phase = "waiting"
+
+    def on_timer_tick(self):
+        if self.time_left > 0:
+            self.time_left -= 1
+            self.timer_bar.setValue(self.time_left)
+            if self.time_left == 0:
+                if self.game_phase == "drawing" and self.is_drawer:
+                    self.on_submit_drawing()
+                elif self.game_phase == "guessing" and self.is_drawer:
+                    self.network.send_message({"type": "game_action", "action": "end_round_request"})
+
+    def send_guess_or_chat(self):
+        msg = self.chat_input.text().strip()
+        if msg:
+            if self.game_phase == "guessing" and not self.is_drawer:
+                self.network.send_message({"type": "game_action", "action": "guess", "word": msg})
+            else:
+                self.network.send_message({"type": "chat", "msg": msg, "room_id": self.room_info.get("room_id", "")})
+            self.chat_input.clear()
+
+    def on_submit_drawing(self):
+        if self.game_phase == "drawing" and self.is_drawer:
+            img_b64 = self.board.get_image_data()
+            self.network.send_message({"type": "game_action", "action": "submit_drawing", "image": img_b64})
+            self.board.can_draw = False
+            self.clear_btn.setEnabled(False)
+            self.submit_btn.setEnabled(False)
+            self.game_status.setText("画作已提交，等待大家猜词...")
+
+    def on_start_game(self):
+        self.network.send_message({"type": "game_action", "action": "request_start"})
+
+    def leave_room(self):
+        self.network.send_message({"type": "leave_room"})
+        self.network.message_received.emit({"type": "_local_leave_room"})
+
+    def play_sound(self, sound_type):
+        import winsound
+        try:
+            import make_sounds
+            assets_dir = make_sounds.get_assets_dir()
+            sound_file = os.path.join(assets_dir, f"{sound_type}.wav")
+        except:
+            sound_file = get_resource_path(f"assets/{sound_type}.wav")
+        if os.path.exists(sound_file):
+            winsound.PlaySound(sound_file, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+
+    def handle_network_message(self, msg: dict):
+        msg_type = msg.get("type")
+        
+        if msg_type == "room_joined":
+            self.room_info = msg.get("room_info", {})
+            self.my_role = msg.get("role", "spectator")
+            self.chat_display.clear()
+            self.score_list.clear()
+            self.reset_game()
+            self.game_status.setText("已加入房间，等待中...")
+            my_name = getattr(self.network, 'username', '')
+            creator = self.room_info.get("creator", "")
+            if my_name == creator:
+                self.start_btn.show()
+            else:
+                self.start_btn.hide()
+            
+        elif msg_type == "chat":
+            room_id = msg.get("room_id")
+            if room_id == self.room_info.get("room_id"):
+                sender = msg.get("sender", "Unknown")
+                text = msg.get("msg", "")
+                self.chat_display.append(f"<b>{sender}:</b> {text}")
+                
+        elif msg_type == "room_update":
+            self.room_info = msg.get("room_info", {})
+            
+        elif msg_type == "game_action":
+            action = msg.get("action")
+            if action == "start_round":
+                self.play_sound("start")
+                self.reset_game()
+                self.start_btn.hide()
+                drawer = msg.get("drawer")
+                word = msg.get("word")
+                scores = msg.get("scores", {})
+                self.correct_guessers = []
+                
+                self.score_list.clear()
+                for p, s in scores.items():
+                    self.score_list.addItem(f"{p}: {s} 分")
+                    
+                self.game_phase = "drawing"
+                self.board.clear_board()
+                self.chat_display.append(f"<i style='color:blue'>--- 新的一轮开始，画手是 {drawer} ---</i>")
+                
+                my_name = getattr(self.network, 'username', '')
+                if my_name == drawer:
+                    self.is_drawer = True
+                    self.board.can_draw = True
+                    self.clear_btn.setEnabled(True)
+                    self.submit_btn.setEnabled(True)
+                    self.chat_input.setEnabled(True) # Drawer can still chat
+                    self.send_btn.setEnabled(True)
+                    self.game_status.setText(f"你的回合，请画出: 【{word}】")
+                    
+                    self.time_left = 60
+                    self.timer_bar.setRange(0, 60)
+                    self.timer_bar.setValue(60)
+                    self.timer_bar.show()
+                    self.timer.start(1000)
+                else:
+                    self.is_drawer = False
+                    self.board.can_draw = False
+                    self.clear_btn.setEnabled(False)
+                    self.submit_btn.setEnabled(False)
+                    self.chat_input.setEnabled(True)
+                    self.send_btn.setEnabled(True)
+                    self.game_status.setText(f"等待 {drawer} 作画...")
+                    
+                    self.timer_bar.hide()
+                    self.timer.stop()
+                    
+            elif action == "submit_drawing":
+                self.game_phase = "guessing"
+                self.board.set_image_data(msg.get("image"))
+                self.play_sound("drop")
+                
+                if self.is_drawer:
+                    self.time_left = 30
+                    self.timer_bar.setRange(0, 30)
+                    self.timer_bar.setValue(30)
+                    self.timer_bar.show()
+                    self.timer.start(1000)
+                else:
+                    self.game_status.setText("画作已提交，请开始猜词！")
+                    self.time_left = 30
+                    self.timer_bar.setRange(0, 30)
+                    self.timer_bar.setValue(30)
+                    self.timer_bar.show()
+                    self.timer.start(1000)
+                    
+            elif action == "player_guessed_correctly":
+                player = msg.get("player")
+                self.play_sound("win")
+                self.correct_guessers.append(player)
+                self.chat_display.append(f"<b style='color:green'>{player} 猜对了！</b>")
+                
+                my_name = getattr(self.network, 'username', '')
+                if my_name == player:
+                    self.chat_input.setEnabled(False)
+                    self.send_btn.setEnabled(False)
+                    self.game_status.setText("恭喜你猜对了，等待其他玩家...")
+                    
+                # 检查是否所有人都猜对了，如果是则房主/画手立刻发送结算请求
+                if self.is_drawer and len(self.correct_guessers) >= len(self.room_info.get("players", [])) - 1:
+                    self.timer.stop()
+                    self.on_timer_tick() # trigger round end
+                    
+            elif action == "round_end":
+                self.timer.stop()
+                self.timer_bar.hide()
+                self.game_phase = "waiting"
+                word = msg.get("word")
+                scores = msg.get("scores", {})
+                
+                self.chat_display.append(f"<i style='color:purple'>回合结束！正确答案是: 【{word}】</i>")
+                self.game_status.setText(f"回合结束！答案是: 【{word}】")
+                
+                self.score_list.clear()
+                for p, s in scores.items():
+                    self.score_list.addItem(f"{p}: {s} 分")
+                    
+            elif action == "game_over":
+                self.timer.stop()
+                self.timer_bar.hide()
+                self.game_phase = "waiting"
+                scores = msg.get("scores", {})
+                
+                self.chat_display.append("<b style='color:red'>--- 游戏结束 ---</b>")
+                self.game_status.setText("游戏结束！")
+                
+                self.score_list.clear()
+                for p, s in scores.items():
+                    self.score_list.addItem(f"{p}: {s} 分")
+                    
+                my_name = getattr(self.network, 'username', '')
+                creator = self.room_info.get("creator", "")
+                if my_name == creator:
+                    self.start_btn.show()
+                    self.start_btn.setText("再来一局")
