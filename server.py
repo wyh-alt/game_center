@@ -52,22 +52,30 @@ class Room:
         
         drawer_name = room.players[room.drawer_index].username
         
+        # 记录本轮得分
+        round_scores = {p.username: 0 for p in room.players}
+        
         # 所有人答对画手不加分，否则画手每个答对的人+5分
         if 0 < correct_count < total_guessers:
-            room.scores[drawer_name] += correct_count * 5
+            points = correct_count * 5
+            room.scores[drawer_name] += points
+            round_scores[drawer_name] = points
             
         # 猜对者依次得分：8, 7, 6, 5... (保底2分)
         for i, p_name in enumerate(room.correct_guessers):
             points = max(2, 8 - i)
             if p_name in room.scores:
                 room.scores[p_name] += points
+                round_scores[p_name] = points
                 
         room.broadcast({
             "type": "game_action",
             "action": "round_end",
             "scores": room.scores,
+            "round_scores": round_scores,
             "word": room.current_word,
-            "correct_guessers": room.correct_guessers
+            "correct_guessers": room.correct_guessers,
+            "drawer": drawer_name
         }, sender=None)
         
         room.drawer_index += 1
@@ -417,8 +425,7 @@ class GameServer:
     def broadcast_room_list(self):
         rooms_info = [r.get_info() for r in self.rooms.values()]
         for client in self.clients:
-            if client.current_room is None:
-                client.send_msg({"type": "room_list", "rooms": rooms_info})
+            client.send_msg({"type": "room_list", "rooms": rooms_info})
 
     def send_room_list(self, client: ClientHandler):
         rooms_info = [r.get_info() for r in self.rooms.values()]

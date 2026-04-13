@@ -371,6 +371,10 @@ class GomokuInterface(QWidget):
             s1 = self.player_scores.get(p1, 0)
             s2 = self.player_scores.get(p2, 0)
             self.score_label.setText(f"计分板: {p1} ({s1}) - {p2} ({s2})")
+        elif len(players) == 1:
+            p1 = players[0]
+            s1 = self.player_scores.get(p1, 0)
+            self.score_label.setText(f"计分板: {p1} ({s1}) - 等待加入...")
         else:
             self.score_label.setText("计分板: 等待玩家加入...")
 

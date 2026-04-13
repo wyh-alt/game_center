@@ -71,6 +71,9 @@ class GuessNumberInterface(QWidget):
         self.panel = CardWidget(self)
         self.panel_layout = QVBoxLayout(self.panel)
         
+        self.score_label = QLabel("计分板: 等待加入...", self)
+        self.score_label.setStyleSheet("font-size: 14px; font-weight: bold;")
+        
         self.chat_display = TextEdit(self)
         self.chat_display.setReadOnly(True)
         self.chat_display.setFixedHeight(200)
@@ -91,6 +94,7 @@ class GuessNumberInterface(QWidget):
         self.leave_btn = PushButton("离开房间", self)
         self.leave_btn.clicked.connect(self.leave_room)
         
+        self.panel_layout.addWidget(self.score_label)
         self.panel_layout.addWidget(QLabel("房间聊天:"))
         self.panel_layout.addWidget(self.chat_display)
         self.panel_layout.addLayout(self.chat_input_layout)
@@ -112,6 +116,17 @@ class GuessNumberInterface(QWidget):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.on_timer_tick)
         self.time_left = 0
+
+    def update_scoreboard(self):
+        players = self.room_info.get("players", [])
+        if len(players) == 2:
+            p1, p2 = players[0], players[1]
+            self.score_label.setText(f"计分板: {p1} - {p2}")
+        elif len(players) == 1:
+            p1 = players[0]
+            self.score_label.setText(f"计分板: {p1} - 等待加入...")
+        else:
+            self.score_label.setText("计分板: 等待加入...")
 
     def on_timer_tick(self):
         if self.time_left > 0:
@@ -191,6 +206,7 @@ class GuessNumberInterface(QWidget):
             self.my_role = msg.get("role", "spectator")
             self.chat_display.clear()
             self.reset_game()
+            self.update_scoreboard()
             self.game_status.setText("已加入房间，等待中...")
             
         elif msg_type == "chat":
@@ -202,6 +218,7 @@ class GuessNumberInterface(QWidget):
                 
         elif msg_type == "room_update":
             self.room_info = msg.get("room_info", {})
+            self.update_scoreboard()
             
         elif msg_type == "game_action":
             action = msg.get("action")

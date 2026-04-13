@@ -3,7 +3,7 @@ import os
 import base64
 from PyQt6.QtCore import Qt, QTimer, QPoint, QBuffer, QIODevice
 from PyQt6.QtGui import QPainter, QPen, QPixmap, QColor
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QDialog
 from qfluentwidgets import SubtitleLabel, PrimaryPushButton, CardWidget, PushButton, TextEdit, LineEdit, ProgressBar
 
 def get_resource_path(relative_path):
@@ -213,6 +213,8 @@ class DrawGuessInterface(QWidget):
             self.my_role = msg.get("role", "spectator")
             self.chat_display.clear()
             self.score_list.clear()
+            for p in self.room_info.get("players", []):
+                self.score_list.addItem(f"{p}: 0 分")
             self.reset_game()
             self.game_status.setText("已加入房间，等待中...")
             my_name = getattr(self.network, 'username', '')
@@ -231,6 +233,10 @@ class DrawGuessInterface(QWidget):
                 
         elif msg_type == "room_update":
             self.room_info = msg.get("room_info", {})
+            if self.game_phase == "waiting":
+                self.score_list.clear()
+                for p in self.room_info.get("players", []):
+                    self.score_list.addItem(f"{p}: 0 分")
             
         elif msg_type == "game_action":
             action = msg.get("action")
@@ -320,6 +326,8 @@ class DrawGuessInterface(QWidget):
                 self.game_phase = "waiting"
                 word = msg.get("word")
                 scores = msg.get("scores", {})
+                round_scores = msg.get("round_scores", {})
+                drawer = msg.get("drawer", "未知")
                 
                 self.chat_display.append(f"<i style='color:purple'>回合结束！正确答案是: 【{word}】</i>")
                 self.game_status.setText(f"回合结束！答案是: 【{word}】")
@@ -327,6 +335,23 @@ class DrawGuessInterface(QWidget):
                 self.score_list.clear()
                 for p, s in scores.items():
                     self.score_list.addItem(f"{p}: {s} 分")
+                    
+                # 弹窗显示本轮得分
+                dialog = QDialog(self)
+                dialog.setWindowTitle("本轮得分情况")
+                dialog.setFixedSize(300, 400)
+                layout = QVBoxLayout(dialog)
+                layout.addWidget(SubtitleLabel(f"本轮答案: 【{word}】", dialog))
+                layout.addWidget(QLabel(f"画手: {drawer}", dialog))
+                
+                score_list = QListWidget(dialog)
+                for p, s in round_scores.items():
+                    score_list.addItem(f"{p}: +{s} 分")
+                layout.addWidget(score_list)
+                
+                # 5秒后自动关闭弹窗
+                QTimer.singleShot(5000, dialog.accept)
+                dialog.exec()
                     
             elif action == "game_over":
                 self.timer.stop()
@@ -341,8 +366,48 @@ class DrawGuessInterface(QWidget):
                 for p, s in scores.items():
                     self.score_list.addItem(f"{p}: {s} 分")
                     
+                # 弹窗显示最终积分排行榜
+                dialog = QDialog(self)
+                dialog.setWindowTitle("游戏结束 - 积分排行榜")
+                dialog.setFixedSize(300, 400)
+                layout = QVBoxLayout(dialog)
+                layout.addWidget(SubtitleLabel("最终排行榜", dialog))
+                
+                score_list = QListWidget(dialog)
+                sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+                for i, (p, s) in enumerate(sorted_scores):
+                    rank = i + 1
+                    item_text = f"第 {rank} 名: {p} ({s} 分)"
+                    if rank == 1:
+                        item_text = "🏆 " + item_text
+                    score_list.addItem(item_text)
+                layout.addWidget(score_list)
+                
                 my_name = getattr(self.network, 'username', '')
                 creator = self.room_info.get("creator", "")
+                
+                if my_name == creator:
+                    btn_layout = QHBoxLayout()
+                    play_again_btn = PrimaryPushButton("再来一局", dialog)
+                    close_btn = PushButton("确定", dialog)
+                    
+                    def on_play_again_clicked():
+                        dialog.accept()
+                        self.on_start_game()
+                        
+                    play_again_btn.clicked.connect(on_play_again_clicked)
+                    close_btn.clicked.connect(dialog.accept)
+                    
+                    btn_layout.addWidget(play_again_btn)
+                    btn_layout.addWidget(close_btn)
+                    layout.addLayout(btn_layout)
+                else:
+                    close_btn = PrimaryPushButton("确定", dialog)
+                    close_btn.clicked.connect(dialog.accept)
+                    layout.addWidget(close_btn)
+                    
+                dialog.exec()
+                    
                 if my_name == creator:
                     self.start_btn.show()
                     self.start_btn.setText("再来一局")
