@@ -113,6 +113,10 @@ class IdiomSolitaireInterface(QWidget):
         if self.time_left > 0 and not self.game_over:
             self.time_left -= 1
             self.timer_bar.setValue(self.time_left)
+            
+            if self.time_left in [1, 2, 3] and self.is_my_turn:
+                self.play_sound("countdown")
+                
             if self.time_left == 0 and self.is_my_turn:
                 # Timeout, this player loses
                 self.network.send_message({

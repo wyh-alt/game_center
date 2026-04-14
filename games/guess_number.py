@@ -132,6 +132,10 @@ class GuessNumberInterface(QWidget):
         if self.time_left > 0:
             self.time_left -= 1
             self.timer_bar.setValue(self.time_left)
+            
+            if self.time_left in [1, 2, 3] and not self.is_thinker and self.my_role == "player":
+                self.play_sound("countdown")
+                
             if self.time_left == 0 and not self.is_thinker and self.my_role == "player":
                 # Timeout, guesser loses
                 self.network.send_message({

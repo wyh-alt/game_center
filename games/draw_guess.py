@@ -168,6 +168,15 @@ class DrawGuessInterface(QWidget):
         if self.time_left > 0:
             self.time_left -= 1
             self.timer_bar.setValue(self.time_left)
+            
+            if self.time_left in [1, 2, 3]:
+                # 在猜词阶段，非画手且没猜对时，播放倒计时；在画画阶段，画手播放倒计时
+                my_name = getattr(self.network, 'username', '')
+                if self.game_phase == "guessing" and not self.is_drawer and my_name not in self.correct_guessers:
+                    self.play_sound("countdown")
+                elif self.game_phase == "drawing" and self.is_drawer:
+                    self.play_sound("countdown")
+                    
             if self.time_left == 0:
                 if self.game_phase == "drawing" and self.is_drawer:
                     self.on_submit_drawing()

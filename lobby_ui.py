@@ -59,9 +59,13 @@ class LobbyInterface(QWidget):
         self.connect_btn = PrimaryPushButton("连接", self)
         self.connect_btn.clicked.connect(self.on_connect_clicked)
         
+        self.share_ip_btn = PushButton("分享我的IP地址", self)
+        self.share_ip_btn.clicked.connect(self.on_share_ip_clicked)
+        
         self.connect_layout.addWidget(self.ip_input)
         self.connect_layout.addWidget(self.name_input)
         self.connect_layout.addWidget(self.connect_btn)
+        self.connect_layout.addWidget(self.share_ip_btn)
         
         self.main_layout.addWidget(self.connect_card)
         
@@ -134,6 +138,7 @@ class LobbyInterface(QWidget):
         self.chat_card.setEnabled(enabled)
         self.ip_input.setEnabled(not enabled)
         self.name_input.setEnabled(not enabled)
+        self.share_ip_btn.setEnabled(not enabled)
         self.connect_btn.setEnabled(True)
         if enabled:
             self.connect_btn.setText("断开连接")
@@ -168,6 +173,30 @@ class LobbyInterface(QWidget):
         
         self.network.host = ip
         self.network.start()
+        
+    def on_share_ip_clicked(self):
+        import socket
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+        except Exception:
+            ip = "127.0.0.1"
+            
+        QApplication.clipboard().setText(ip)
+        self.ip_input.setText(ip)
+        
+        InfoBar.success(
+            title="分享成功",
+            content=f"已将我的IP地址 ({ip}) 复制到剪贴板，并尝试连接作为房主！",
+            orient=Qt.Orientation.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP_RIGHT,
+            duration=3000,
+            parent=self
+        )
+        self.on_connect_clicked()
         
     def on_connection_failed(self, error_msg):
         self.set_lobby_enabled(False)
@@ -255,7 +284,7 @@ class LobbyInterface(QWidget):
                 room_name = r.get('room_name', r['room_id'])
                 creator = r.get('creator', '未知')
                 status = "游戏中" if r.get('status') == "playing" else "等待中"
-                self.room_list.addItem(f"[{status}] {room_name} (房主: {creator}) - 人数: {player_count}")
+                self.room_list.addItem(f"[{game_name}] [{status}] {room_name} (房主: {creator}) - 人数: {player_count}")
         elif msg_type == "room_joined":
             # 房间加入成功，通知主窗口切换界面
             pass # 稍后在主窗口中处理

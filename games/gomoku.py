@@ -3,7 +3,7 @@ import os
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QUrl, QTimer
 from PyQt6.QtGui import QPainter, QPen, QBrush, QColor, QFont
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGridLayout
-from qfluentwidgets import SubtitleLabel, PrimaryPushButton, CardWidget, PushButton, TextEdit, LineEdit, InfoBar, InfoBarPosition, ProgressBar
+from qfluentwidgets import SubtitleLabel, PrimaryPushButton, CardWidget, PushButton, ToggleButton, TextEdit, LineEdit, InfoBar, InfoBarPosition, ProgressBar
 
 def get_resource_path(relative_path):
     if hasattr(sys, '_MEIPASS'):
@@ -98,6 +98,18 @@ class GomokuBoard(QWidget):
     def mousePressEvent(self, event):
         if not self.is_my_turn:
             return
+            
+        if event.button() == Qt.MouseButton.RightButton:
+            if self.skill_mode:
+                self.skill_mode = None
+                self.selected_pos = None
+                self.swap_first_pos = None
+                self.update()
+                interface = self.parent()
+                interface.update_skill_buttons()
+                interface.status_label.setText("取消释放，请正常落子")
+            return
+            
         pos = event.pos()
         col = round(pos.x() / self.cell_size) - 1
         row = round(pos.y() / self.cell_size) - 1
@@ -122,10 +134,13 @@ class GomokuBoard(QWidget):
                         self.update()
                     elif self.swap_first_pos != (row, col):
                         r1, c1 = self.swap_first_pos
-                        interface.commit_skill("swap")
-                        interface.network.send_message({"type": "game_action", "action": "skill_swap", "r1": r1, "c1": c1, "r2": row, "c2": col})
-                        self.skill_mode = None
-                        self.swap_first_pos = None
+                        if abs(r1 - row) <= 1 and abs(c1 - col) <= 1:
+                            interface.commit_skill("swap")
+                            interface.network.send_message({"type": "game_action", "action": "skill_swap", "r1": r1, "c1": c1, "r2": row, "c2": col})
+                            self.skill_mode = None
+                            self.swap_first_pos = None
+                        else:
+                            InfoBar.warning("无效操作", "只能交换相邻的棋子", parent=interface)
             elif self.skill_mode == "move":
                 if not self.selected_pos:
                     if self.board[row][col] == self.my_color and (row, col) != self.last_placed_piece:
@@ -267,8 +282,13 @@ class GomokuInterface(QWidget):
         self.score_label = QLabel("计分板: 暂无数据", self)
         self.score_label.setStyleSheet("font-size: 14px; font-weight: bold;")
         
-        self.skills_layout = QGridLayout()
-        self.skill_btns = {}
+        from qfluentwidgets import FlowLayout
+        self.skills_layout = FlowLayout()
+        
+        self.skill_queue = []
+        self.skill_uid_counter = 0
+        self.active_skill_uid = None
+        
         self.skill_limits = {
             "remove": 2, "swap": 2, "move": 2, "block": 1,
             "see_through": 1, "backtrack": 1, "freeze": 1, "ban": 1
@@ -279,8 +299,8 @@ class GomokuInterface(QWidget):
         }
         self.skill_descs = {
             "remove": "移除任意棋子(非刚落下)",
-            "swap": "交换两棋子(非刚落下)",
-            "move": "移动己方棋子(单局2次)",
+            "swap": "交换两相邻棋子(非刚落下)",
+            "move": "移动己方棋子",
             "block": "放置永久障碍(占回合)",
             "see_through": "高亮对方下步可能点位(不占回合)",
             "backtrack": "撤销对方上步并原位禁手(占回合)",
@@ -289,13 +309,6 @@ class GomokuInterface(QWidget):
         }
         self.skill_inventory = {s: 0 for s in self.skill_limits}
         self.skill_used = {s: 0 for s in self.skill_limits}
-        
-        skills = list(self.skill_limits.keys())
-        for i, sk_id in enumerate(skills):
-            btn = PushButton(self.skill_names[sk_id], self)
-            btn.clicked.connect(lambda checked, s=sk_id: self.activate_skill(s))
-            self.skill_btns[sk_id] = btn
-            self.skills_layout.addWidget(btn, i // 2, i % 2)
             
         self.chat_display = TextEdit(self)
         self.chat_display.setReadOnly(True)
@@ -348,6 +361,10 @@ class GomokuInterface(QWidget):
         if self.time_left > 0:
             self.time_left -= 1
             self.timer_bar.setValue(self.time_left)
+            
+            if self.time_left in [1, 2, 3] and self.board.is_my_turn:
+                self.play_sound("countdown")
+                
             if self.time_left == 0 and self.board.is_my_turn:
                 self.auto_random_place()
                 
@@ -435,6 +452,14 @@ class GomokuInterface(QWidget):
         self.skill_used = {s: 0 for s in self.skill_limits}
         self.is_frozen = False
         self.next_turn_frozen = False
+        self.active_skill_uid = None
+        
+        for item in self.skill_queue:
+            btn = item['btn']
+            self.skills_layout.removeWidget(btn)
+            btn.deleteLater()
+        self.skill_queue.clear()
+        self.skill_uid_counter = 0
         
         self.play_again_btn.hide()
         self.board.update()
@@ -451,10 +476,24 @@ class GomokuInterface(QWidget):
         self.play_again_btn.setText("等待对方同意...")
         self.network.send_message({"type": "game_action", "action": "play_again_request"})
 
-    def activate_skill(self, skill_id):
-        if not self.board.is_my_turn or self.is_frozen: return
-        if self.skill_inventory[skill_id] <= 0: return
-        if self.skill_used[skill_id] >= self.skill_limits[skill_id]: return
+    def activate_skill(self, skill_id, uid):
+        if self.active_skill_uid == uid:
+            self.board.skill_mode = None
+            self.board.selected_pos = None
+            self.board.swap_first_pos = None
+            self.active_skill_uid = None
+            self.status_label.setText("取消释放，请正常落子")
+            self.update_skill_buttons()
+            return
+            
+        if not self.board.is_my_turn or self.is_frozen: 
+            self.update_skill_buttons()
+            return
+
+        self.board.skill_mode = skill_id
+        self.active_skill_uid = uid
+        self.board.selected_pos = None
+        self.board.swap_first_pos = None
 
         if skill_id == "see_through":
             self.commit_skill("see_through")
@@ -467,6 +506,9 @@ class GomokuInterface(QWidget):
         elif skill_id == "backtrack":
             if not self.board.last_placed_piece:
                 InfoBar.error("错误", "没有可撤销的落子", parent=self)
+                self.board.skill_mode = None
+                self.active_skill_uid = None
+                self.update_skill_buttons()
                 return
             self.commit_skill("backtrack")
             r, c = self.board.last_placed_piece
@@ -476,9 +518,6 @@ class GomokuInterface(QWidget):
             self.network.send_message({"type": "game_action", "action": "skill_freeze"})
             self.status_label.setText("已冻结对方，请正常落子")
         else:
-            self.board.skill_mode = skill_id
-            self.board.selected_pos = None
-            self.board.swap_first_pos = None
             self.status_label.setText(f"请使用技能：{self.skill_names[skill_id]}")
             self.update_skill_buttons()
 
@@ -486,6 +525,21 @@ class GomokuInterface(QWidget):
         self.skill_inventory[skill_id] -= 1
         self.skill_used[skill_id] += 1
         self.play_sound("skill")
+        
+        target_item = None
+        for item in self.skill_queue:
+            if item['uid'] == self.active_skill_uid:
+                target_item = item
+                break
+                
+        if target_item:
+            self.skill_queue.remove(target_item)
+            btn = target_item['btn']
+            self.skills_layout.removeWidget(btn)
+            btn.deleteLater()
+            
+        self.active_skill_uid = None
+        self.board.skill_mode = None
         self.update_skill_buttons()
 
     def draw_skill(self):
@@ -494,20 +548,35 @@ class GomokuInterface(QWidget):
             import random
             drawn = random.choice(available)
             self.skill_inventory[drawn] += 1
+            
+            uid = self.skill_uid_counter
+            self.skill_uid_counter += 1
+            btn = ToggleButton(self.skill_names[drawn], self)
+            btn.clicked.connect(lambda checked, s=drawn, u=uid: self.activate_skill(s, u))
+            self.skill_queue.append({'uid': uid, 'type': drawn, 'btn': btn})
+            self.skills_layout.addWidget(btn)
+            
+            self.play_sound("award")
             self.chat_display.append(f"<i style='color:green'>你抽取到了技能：{self.skill_names[drawn]}</i>")
             self.update_skill_buttons()
 
     def update_skill_buttons(self):
-        for sk_id, btn in self.skill_btns.items():
-            inv = self.skill_inventory.get(sk_id, 0)
-            used = self.skill_used.get(sk_id, 0)
-            limit = self.skill_limits.get(sk_id, 0)
+        for item in self.skill_queue:
+            sk_id = item['type']
+            uid = item['uid']
+            btn = item['btn']
             
-            btn.setText(f"{self.skill_names[sk_id]} ({inv})")
-            btn.setToolTip(f"{self.skill_descs[sk_id]}\n已使用: {used}/{limit}")
+            btn.setText(f"{self.skill_names[sk_id]}")
+            btn.setToolTip(f"{self.skill_descs[sk_id]}")
             
-            if not self.board.is_my_turn or self.is_frozen or inv <= 0 or used >= limit:
-                btn.setEnabled(False)
+            if self.active_skill_uid == uid:
+                btn.setChecked(True)
+            else:
+                btn.setChecked(False)
+            
+            if not self.board.is_my_turn or self.is_frozen:
+                if self.active_skill_uid != uid:
+                    btn.setEnabled(False)
             else:
                 btn.setEnabled(True)
 
