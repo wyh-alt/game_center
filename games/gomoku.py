@@ -76,9 +76,22 @@ class GomokuBoard(QWidget):
                     painter.drawEllipse(QPoint(x, y), self.cell_size//2, self.cell_size//2)
                     
                 if (r, c) in self.banned_points:
+                    data = self.banned_points[(r, c)]
+                    turns = data.get("turns", 1)
+                    if data.get("color") == 3:
+                        display_turns = (turns + 1) // 2
+                    else:
+                        display_turns = turns
+                        
+                    radius = self.cell_size // 2 - 4
                     painter.setPen(QPen(Qt.GlobalColor.red, 2))
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.drawEllipse(QPoint(x, y), radius, radius)
+                    painter.drawLine(x - radius + 2, y - radius + 2, x + radius - 2, y + radius - 2)
+                    
+                    painter.setPen(QPen(Qt.GlobalColor.black, 2))
                     painter.setFont(QFont("Arial", 12, QFont.Weight.Bold))
-                    painter.drawText(x - 8, y + 6, "禁")
+                    painter.drawText(x - 5, y + 5, str(display_turns))
                     
         for r, c in self.highlights:
             x = (c + 1) * self.cell_size
@@ -118,8 +131,8 @@ class GomokuBoard(QWidget):
             
             if self.skill_mode is None:
                 if self.board[row][col] == 0:
-                    if (row, col) in self.banned_points and self.banned_points[(row, col)]["color"] == self.my_color:
-                        InfoBar.warning("禁手", "此处被对方禁手，无法落子", parent=interface)
+                    if (row, col) in self.banned_points and self.banned_points[(row, col)]["color"] in (self.my_color, 3):
+                        InfoBar.warning("禁手", "此处被禁手，无法落子", parent=interface)
                         return
                     interface.network.send_message({"type": "game_action", "action": "place", "row": row, "col": col, "color": self.my_color})
             elif self.skill_mode == "remove":
@@ -147,7 +160,7 @@ class GomokuBoard(QWidget):
                         self.selected_pos = (row, col)
                         self.update()
                 else:
-                    if self.board[row][col] == 0 and ((row, col) not in self.banned_points or self.banned_points[(row, col)]["color"] != self.my_color):
+                    if self.board[row][col] == 0 and ((row, col) not in self.banned_points or self.banned_points[(row, col)]["color"] not in (self.my_color, 3)):
                         fr, fc = self.selected_pos
                         interface.commit_skill("move")
                         interface.network.send_message({"type": "game_action", "action": "skill_move", "from_r": fr, "from_c": fc, "to_r": row, "to_c": col})
@@ -203,7 +216,7 @@ class GomokuBoard(QWidget):
         scores = []
         for r in range(self.grid_size):
             for c in range(self.grid_size):
-                if self.board[r][c] == 0 and ((r, c) not in self.banned_points or self.banned_points[(r, c)]["color"] != color):
+                if self.board[r][c] == 0 and ((r, c) not in self.banned_points or self.banned_points[(r, c)]["color"] not in (color, 3)):
                     score = self.evaluate_point(r, c, color)
                     scores.append((score, r, c))
         scores.sort(key=lambda x: x[0], reverse=True)
@@ -301,7 +314,7 @@ class GomokuInterface(QWidget):
             "remove": "移除任意棋子(非刚落下)",
             "swap": "交换两相邻棋子(非刚落下)",
             "move": "移动己方棋子",
-            "block": "放置永久障碍(占回合)",
+            "block": "放置永久障碍(不占回合)",
             "see_through": "高亮对方下步可能点位(不占回合)",
             "backtrack": "撤销对方上步并原位禁手(占回合)",
             "freeze": "冻结对方下回合技能(不占回合)",
@@ -375,7 +388,7 @@ class GomokuInterface(QWidget):
         for r in range(self.board.grid_size):
             for c in range(self.board.grid_size):
                 if self.board.board[r][c] == 0:
-                    if (r, c) not in self.board.banned_points or self.board.banned_points[(r, c)]["color"] != self.board.my_color:
+                    if (r, c) not in self.board.banned_points or self.board.banned_points[(r, c)]["color"] not in (self.board.my_color, 3):
                         valid_spots.append((r, c))
         if valid_spots:
             r, c = random.choice(valid_spots)
@@ -582,8 +595,8 @@ class GomokuInterface(QWidget):
 
     def advance_turn(self, sender_color):
         to_remove = []
-        for pt, data in self.board.banned_points.items():
-            if data["color"] == sender_color:
+        for pt, data in list(self.board.banned_points.items()):
+            if data["color"] == sender_color or data["color"] == 3:
                 data["turns"] -= 1
                 if data["turns"] <= 0:
                     to_remove.append(pt)
@@ -708,9 +721,11 @@ class GomokuInterface(QWidget):
                 self.play_sound("skill")
                 r, c = msg.get("row"), msg.get("col")
                 self.board.board[r][c] = 0
+                self.board.banned_points[(r, c)] = {"color": 3, "turns": 3}
                 self.board.update()
                 
                 sender = msg.get("sender")
+                self.chat_display.append(f"<i style='color:gray'>{sender} 使用了消除技能</i>")
                 sender_color = 1 if sender == self.current_black else 2
                 self.advance_turn(sender_color)
                 
@@ -766,8 +781,7 @@ class GomokuInterface(QWidget):
                 self.board.update()
                 
                 sender = msg.get("sender")
-                sender_color = 1 if sender == self.current_black else 2
-                self.advance_turn(sender_color)
+                self.chat_display.append(f"<i style='color:gray'>{sender} 使用了阻挡技能</i>")
                 
             elif action == "skill_ban":
                 self.play_sound("skill")
@@ -785,12 +799,11 @@ class GomokuInterface(QWidget):
                 self.play_sound("skill")
                 r = msg.get("row")
                 c = msg.get("col")
-                target_color = msg.get("target_color")
                 if r is not None and c is not None:
                     if self.board.board[r][c] in [1, 2]:
                         self.board.board[r][c] = 0
                         self.board.last_placed_piece = None
-                    self.board.banned_points[(r, c)] = {"color": target_color, "turns": 1}
+                    self.board.banned_points[(r, c)] = {"color": 3, "turns": 3}
                     self.board.update()
                 sender = msg.get("sender")
                 self.chat_display.append(f"<i style='color:gray'>{sender} 使用了回溯技能</i>")
