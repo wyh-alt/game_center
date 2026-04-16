@@ -5,6 +5,7 @@ from PyQt6.QtCore import Qt, QTimer, QPoint, QBuffer, QIODevice
 from PyQt6.QtGui import QPainter, QPen, QPixmap, QColor
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QDialog
 from qfluentwidgets import SubtitleLabel, PrimaryPushButton, CardWidget, PushButton, TextEdit, LineEdit, ProgressBar
+from qfluentwidgets import FluentIcon as FIF, ToolButton
 
 def get_resource_path(relative_path):
     if hasattr(sys, '_MEIPASS'):
@@ -20,6 +21,8 @@ class DrawingBoard(QWidget):
         self.drawing = False
         self.last_point = QPoint()
         self.can_draw = False
+        self.current_color = QColor(Qt.GlobalColor.black)
+        self.history = []
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -33,22 +36,42 @@ class DrawingBoard(QWidget):
         if event.button() == Qt.MouseButton.LeftButton and self.can_draw:
             self.drawing = True
             self.last_point = event.pos()
+            self.history.append(self.pixmap.copy())
+            if len(self.history) > 20:
+                self.history.pop(0)
 
     def mouseMoveEvent(self, event):
         if (event.buttons() & Qt.MouseButton.LeftButton) and self.drawing and self.can_draw:
             painter = QPainter(self.pixmap)
-            painter.setPen(QPen(Qt.GlobalColor.black, 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            painter.setPen(QPen(self.current_color, 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
             painter.drawLine(self.last_point, event.pos())
             self.last_point = event.pos()
             self.update()
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton and self.can_draw:
             self.drawing = False
+            self.request_sync()
 
     def clear_board(self):
+        if self.can_draw:
+            self.history.append(self.pixmap.copy())
+            if len(self.history) > 20:
+                self.history.pop(0)
         self.pixmap.fill(Qt.GlobalColor.white)
         self.update()
+        if self.can_draw:
+            self.request_sync()
+
+    def undo(self):
+        if self.can_draw and self.history:
+            self.pixmap = self.history.pop()
+            self.update()
+            self.request_sync()
+
+    def request_sync(self):
+        if self.can_draw and hasattr(self, 'sync_callback') and self.sync_callback:
+            self.sync_callback(self.get_image_data())
 
     def get_image_data(self):
         buffer = QBuffer()
@@ -57,6 +80,7 @@ class DrawingBoard(QWidget):
         return base64.b64encode(buffer.data()).decode('utf-8')
 
     def set_image_data(self, b64_data):
+        if not b64_data: return
         img_data = base64.b64decode(b64_data)
         self.pixmap.loadFromData(img_data, "PNG")
         self.update()
@@ -86,12 +110,41 @@ class DrawGuessInterface(QWidget):
         self.timer_bar.hide()
         
         self.board = DrawingBoard(self)
+        self.board.sync_callback = self.on_sync_drawing
         
         self.tools_layout = QHBoxLayout()
-        self.clear_btn = PushButton("清空画板", self)
+        
+        # 颜色选择按钮
+        self.color_layout = QHBoxLayout()
+        self.colors = [
+            (Qt.GlobalColor.black, "黑"),
+            (Qt.GlobalColor.red, "红"),
+            (Qt.GlobalColor.blue, "蓝"),
+            (Qt.GlobalColor.green, "绿"),
+            (Qt.GlobalColor.yellow, "黄")
+        ]
+        self.color_btns = []
+        for color, name in self.colors:
+            btn = PushButton(name, self)
+            btn.setFixedWidth(40)
+            btn.clicked.connect(lambda checked, c=color: self.set_pen_color(c))
+            self.color_layout.addWidget(btn)
+            self.color_btns.append(btn)
+            
+        self.undo_btn = ToolButton(FIF.CANCEL, self)
+        self.undo_btn.setToolTip("撤销 (Undo)")
+        self.undo_btn.clicked.connect(self.board.undo)
+        
+        self.clear_btn = ToolButton(FIF.DELETE, self)
+        self.clear_btn.setToolTip("清空画板 (Clear)")
         self.clear_btn.clicked.connect(self.board.clear_board)
+        
         self.submit_btn = PrimaryPushButton("提交画作", self)
         self.submit_btn.clicked.connect(self.on_submit_drawing)
+        
+        self.tools_layout.addLayout(self.color_layout)
+        self.tools_layout.addStretch(1)
+        self.tools_layout.addWidget(self.undo_btn)
         self.tools_layout.addWidget(self.clear_btn)
         self.tools_layout.addWidget(self.submit_btn)
         
@@ -153,13 +206,24 @@ class DrawGuessInterface(QWidget):
         self.timer.timeout.connect(self.on_timer_tick)
         self.time_left = 0
 
+    def set_pen_color(self, color):
+        self.board.current_color = QColor(color)
+
+    def on_sync_drawing(self, img_b64):
+        if self.game_phase == "drawing" and self.is_drawer:
+            self.network.send_message({"type": "game_action", "action": "sync_drawing", "image": img_b64})
+
     def reset_game(self):
         self.timer.stop()
         self.timer_bar.hide()
         self.board.clear_board()
         self.board.can_draw = False
+        self.board.history.clear()
+        self.undo_btn.setEnabled(False)
         self.clear_btn.setEnabled(False)
         self.submit_btn.setEnabled(False)
+        for btn in self.color_btns:
+            btn.setEnabled(False)
         self.chat_input.setEnabled(False)
         self.send_btn.setEnabled(False)
         self.game_phase = "waiting"
@@ -168,6 +232,10 @@ class DrawGuessInterface(QWidget):
         if self.time_left > 0:
             self.time_left -= 1
             self.timer_bar.setValue(self.time_left)
+            
+            if self.game_phase == "drawing" and self.is_drawer and self.board.drawing:
+                if self.time_left % 2 == 0:
+                    self.board.request_sync()
             
             if self.time_left in [1, 2, 3]:
                 # 在猜词阶段，非画手且没猜对时，播放倒计时；在画画阶段，画手播放倒计时
@@ -197,8 +265,11 @@ class DrawGuessInterface(QWidget):
             img_b64 = self.board.get_image_data()
             self.network.send_message({"type": "game_action", "action": "submit_drawing", "image": img_b64})
             self.board.can_draw = False
+            self.undo_btn.setEnabled(False)
             self.clear_btn.setEnabled(False)
             self.submit_btn.setEnabled(False)
+            for btn in self.color_btns:
+                btn.setEnabled(False)
             self.game_status.setText("画作已提交，等待大家猜词...")
 
     def on_start_game(self):
@@ -270,8 +341,11 @@ class DrawGuessInterface(QWidget):
                 if my_name == drawer:
                     self.is_drawer = True
                     self.board.can_draw = True
+                    self.undo_btn.setEnabled(True)
                     self.clear_btn.setEnabled(True)
                     self.submit_btn.setEnabled(True)
+                    for btn in self.color_btns:
+                        btn.setEnabled(True)
                     self.chat_input.setEnabled(True) # Drawer can still chat
                     self.send_btn.setEnabled(True)
                     self.game_status.setText(f"你的回合，请画出: 【{word}】")
@@ -284,14 +358,21 @@ class DrawGuessInterface(QWidget):
                 else:
                     self.is_drawer = False
                     self.board.can_draw = False
+                    self.undo_btn.setEnabled(False)
                     self.clear_btn.setEnabled(False)
                     self.submit_btn.setEnabled(False)
+                    for btn in self.color_btns:
+                        btn.setEnabled(False)
                     self.chat_input.setEnabled(True)
                     self.send_btn.setEnabled(True)
                     self.game_status.setText(f"等待 {drawer} 作画...")
                     
                     self.timer_bar.hide()
                     self.timer.stop()
+                    
+            elif action == "sync_drawing":
+                if not self.is_drawer and self.game_phase == "drawing":
+                    self.board.set_image_data(msg.get("image"))
                     
             elif action == "submit_drawing":
                 self.game_phase = "guessing"
