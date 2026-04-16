@@ -198,10 +198,15 @@ class ClientHandler(threading.Thread):
             
         elif msg_type == "chat":
             room_id = msg.get("room_id")
-            chat_msg = {"type": "chat", "sender": self.username, "msg": msg.get("msg", ""), "room_id": room_id}
+            msg_text = msg.get("msg", "")
+            chat_msg = {"type": "chat", "sender": self.username, "msg": msg_text, "room_id": room_id}
             if room_id == "lobby":
                 self.server.broadcast_lobby(chat_msg)
             elif self.current_room:
+                room = self.current_room
+                if room.game_type == "draw_guess" and room.status == "playing" and hasattr(room, 'current_word'):
+                    if room.current_word in msg_text:
+                        chat_msg["msg"] = msg_text.replace(room.current_word, "<span style='color:green'>****</span>")
                 self.current_room.broadcast(chat_msg)
                 
         elif msg_type == "create_room":
@@ -304,10 +309,17 @@ class ClientHandler(threading.Thread):
                 room = self.current_room
                 if action == "guess":
                     if room.game_type == "draw_guess":
-                        word = msg.get("word")
+                        word = msg.get("word", "")
                         if hasattr(room, 'drawer_index') and room.drawer_index < len(room.players):
                             drawer_name = room.players[room.drawer_index].username
                             if self.username != drawer_name and self.username not in room.correct_guessers:
+                                masked_word = word
+                                if hasattr(room, 'current_word') and room.current_word in word:
+                                    masked_word = word.replace(room.current_word, "<span style='color:green'>****</span>")
+                                
+                                chat_msg = {"type": "chat", "sender": self.username, "msg": masked_word, "room_id": room.room_id}
+                                room.broadcast(chat_msg, sender=None)
+                                
                                 if word == room.current_word:
                                     room.correct_guessers.append(self.username)
                                     room.broadcast({"type": "game_action", "action": "player_guessed_correctly", "player": self.username}, sender=None)
@@ -315,9 +327,6 @@ class ClientHandler(threading.Thread):
                                     # If all guessers guessed correctly, end round early
                                     if len(room.correct_guessers) == len(room.players) - 1:
                                         room._handle_draw_guess_round_end(room)
-                                else:
-                                    msg["sender"] = self.username
-                                    room.broadcast(msg)
                     else:
                         msg["sender"] = self.username
                         self.current_room.broadcast(msg)

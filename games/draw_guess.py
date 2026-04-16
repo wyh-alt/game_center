@@ -263,6 +263,7 @@ class DrawGuessInterface(QWidget):
             btn.setEnabled(False)
         self.chat_input.setEnabled(False)
         self.send_btn.setEnabled(False)
+        self.chat_input.setPlaceholderText("等待游戏开始...")
         self.game_phase = "waiting"
 
     def on_timer_tick(self):
@@ -374,6 +375,10 @@ class DrawGuessInterface(QWidget):
                 self.board.clear_board()
                 self.chat_display.append(f"<i style='color:blue'>--- 新的一轮开始，画手是 {drawer} ---</i>")
                 
+                self.chat_input.setEnabled(False)
+                self.send_btn.setEnabled(False)
+                self.chat_input.setPlaceholderText("作画期间禁止发言...")
+                
                 my_name = getattr(self.network, 'username', '')
                 if my_name == drawer:
                     self.is_drawer = True
@@ -383,8 +388,6 @@ class DrawGuessInterface(QWidget):
                     self.submit_btn.setEnabled(True)
                     for btn in self.color_btns:
                         btn.setEnabled(True)
-                    self.chat_input.setEnabled(True) # Drawer can still chat
-                    self.send_btn.setEnabled(True)
                     self.game_status.setText(f"你的回合，请画出: 【{word}】")
                     
                     self.time_left = 60
@@ -400,8 +403,6 @@ class DrawGuessInterface(QWidget):
                     self.submit_btn.setEnabled(False)
                     for btn in self.color_btns:
                         btn.setEnabled(False)
-                    self.chat_input.setEnabled(True)
-                    self.send_btn.setEnabled(True)
                     self.game_status.setText(f"等待 {drawer} 作画...")
                     
                     self.timer_bar.hide()
@@ -415,6 +416,10 @@ class DrawGuessInterface(QWidget):
                 self.game_phase = "guessing"
                 self.board.set_image_data(msg.get("image"))
                 self.play_sound("drop")
+                
+                self.chat_input.setEnabled(True)
+                self.send_btn.setEnabled(True)
+                self.chat_input.setPlaceholderText("输入猜测词语或消息...")
                 
                 if self.is_drawer:
                     self.time_left = 30
@@ -440,6 +445,7 @@ class DrawGuessInterface(QWidget):
                 if my_name == player:
                     self.chat_input.setEnabled(False)
                     self.send_btn.setEnabled(False)
+                    self.chat_input.setPlaceholderText("恭喜答对，等待其他玩家...")
                     self.game_status.setText("恭喜你猜对了，等待其他玩家...")
                     
                 # 检查是否所有人都猜对了，如果是则房主/画手立刻发送结算请求
@@ -451,6 +457,9 @@ class DrawGuessInterface(QWidget):
                 self.timer.stop()
                 self.timer_bar.hide()
                 self.game_phase = "waiting"
+                self.chat_input.setEnabled(False)
+                self.send_btn.setEnabled(False)
+                self.chat_input.setPlaceholderText("等待游戏开始...")
                 word = msg.get("word")
                 scores = msg.get("scores", {})
                 round_scores = msg.get("round_scores", {})
