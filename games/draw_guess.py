@@ -3,7 +3,7 @@ import os
 import base64
 from PyQt6.QtCore import Qt, QTimer, QPoint, QBuffer, QIODevice
 from PyQt6.QtGui import QPainter, QPen, QPixmap, QColor
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QDialog
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QDialog, QPushButton
 from qfluentwidgets import SubtitleLabel, PrimaryPushButton, CardWidget, PushButton, TextEdit, LineEdit, ProgressBar
 from qfluentwidgets import FluentIcon as FIF, ToolButton
 
@@ -86,6 +86,37 @@ class DrawingBoard(QWidget):
         self.update()
 
 
+class ColorButton(QPushButton):
+    def __init__(self, color, parent=None):
+        super().__init__(parent)
+        self.color = QColor(color)
+        self.setFixedSize(24, 24)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.is_selected = False
+        self.update_style()
+
+    def set_selected(self, selected):
+        self.is_selected = selected
+        self.update_style()
+
+    def update_style(self):
+        border_color = "rgba(0, 0, 0, 0.4)" if self.is_selected else "transparent"
+        border_width = "3px" if self.is_selected else "2px"
+        self.setStyleSheet(f"""
+            ColorButton {{
+                background-color: {self.color.name()};
+                border-radius: 12px;
+                border: {border_width} solid {border_color};
+            }}
+            ColorButton:hover {{
+                border: 3px solid rgba(0, 0, 0, 0.3);
+            }}
+            ColorButton:disabled {{
+                background-color: {self.color.name()};
+                opacity: 0.5;
+            }}
+        """)
+
 class DrawGuessInterface(QWidget):
     def __init__(self, network, parent=None):
         super().__init__(parent)
@@ -125,11 +156,14 @@ class DrawGuessInterface(QWidget):
         ]
         self.color_btns = []
         for color, name in self.colors:
-            btn = PushButton(name, self)
-            btn.setFixedWidth(40)
-            btn.clicked.connect(lambda checked, c=color: self.set_pen_color(c))
+            btn = ColorButton(color, self)
+            btn.setToolTip(name)
+            btn.clicked.connect(lambda checked, c=color, b=btn: self.set_pen_color(c, b))
             self.color_layout.addWidget(btn)
             self.color_btns.append(btn)
+            
+        if self.color_btns:
+            self.color_btns[0].set_selected(True)
             
         self.undo_btn = ToolButton(FIF.CANCEL, self)
         self.undo_btn.setToolTip("撤销 (Undo)")
@@ -206,8 +240,11 @@ class DrawGuessInterface(QWidget):
         self.timer.timeout.connect(self.on_timer_tick)
         self.time_left = 0
 
-    def set_pen_color(self, color):
+    def set_pen_color(self, color, btn=None):
         self.board.current_color = QColor(color)
+        if btn:
+            for b in self.color_btns:
+                b.set_selected(b == btn)
 
     def on_sync_drawing(self, img_b64):
         if self.game_phase == "drawing" and self.is_drawer:
