@@ -21,7 +21,7 @@ class DrawingBoard(QWidget):
         self.drawing = False
         self.last_point = QPoint()
         self.can_draw = False
-        self.current_color = QColor(Qt.GlobalColor.black)
+        self.current_color = QColor("#4A4A4A")
         self.history = []
 
     def paintEvent(self, event):
@@ -148,11 +148,11 @@ class DrawGuessInterface(QWidget):
         # 颜色选择按钮
         self.color_layout = QHBoxLayout()
         self.colors = [
-            (Qt.GlobalColor.black, "黑"),
-            (Qt.GlobalColor.red, "红"),
-            (Qt.GlobalColor.blue, "蓝"),
-            (Qt.GlobalColor.green, "绿"),
-            (Qt.GlobalColor.yellow, "黄")
+            ("#4A4A4A", "深灰"),
+            ("#D98880", "柔红"),
+            ("#85C1E9", "淡蓝"),
+            ("#7DCEA0", "薄荷绿"),
+            ("#F7DC6F", "奶黄")
         ]
         self.color_btns = []
         for color, name in self.colors:
