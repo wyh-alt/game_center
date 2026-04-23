@@ -46,15 +46,11 @@ class LobbyInterface(QWidget):
         self.connect_layout.setContentsMargins(15, 15, 15, 15)
         
         self.ip_input = EditableComboBox(self)
-        self.ip_input.setPlaceholderText("服务器地址或域名 (例如: 127.0.0.1 或 tcp://xxx.ngrok.io)")
+        self.ip_input.setPlaceholderText("服务器 IP (例如: 127.0.0.1)")
         self.ip_history = load_history()
         self.ip_input.addItems(self.ip_history)
         if self.ip_history:
             self.ip_input.setText(self.ip_history[0])
-            
-        self.port_input = LineEdit(self)
-        self.port_input.setPlaceholderText("端口 (默认8888)")
-        self.port_input.setFixedWidth(100)
         
         self.name_input = LineEdit(self)
         self.name_input.setPlaceholderText("你的昵称")
@@ -67,7 +63,6 @@ class LobbyInterface(QWidget):
         self.share_ip_btn.clicked.connect(self.on_share_ip_clicked)
         
         self.connect_layout.addWidget(self.ip_input)
-        self.connect_layout.addWidget(self.port_input)
         self.connect_layout.addWidget(self.name_input)
         self.connect_layout.addWidget(self.connect_btn)
         self.connect_layout.addWidget(self.share_ip_btn)
@@ -142,7 +137,6 @@ class LobbyInterface(QWidget):
         self.room_card.setEnabled(enabled)
         self.chat_card.setEnabled(enabled)
         self.ip_input.setEnabled(not enabled)
-        self.port_input.setEnabled(not enabled)
         self.name_input.setEnabled(not enabled)
         self.share_ip_btn.setEnabled(not enabled)
         self.connect_btn.setEnabled(True)
@@ -159,48 +153,25 @@ class LobbyInterface(QWidget):
 
     def on_connect_clicked(self):
         ip = self.ip_input.text().strip()
-        port_str = self.port_input.text().strip()
-        
         if not ip:
             return
-            
-        # 处理带有 tcp:// 前缀的 ngrok 地址
-        if ip.startswith("tcp://"):
-            ip = ip[6:]
-            
-        # 允许地址中直接包含端口号，例如 "x.x.x.ngrok.io:12345"
-        if ":" in ip:
-            parts = ip.split(":")
-            ip = parts[0]
-            if not port_str:
-                port_str = parts[1]
-                
-        port = 8888
-        if port_str:
-            try:
-                port = int(port_str)
-            except ValueError:
-                InfoBar.error("错误", "端口号必须是数字", parent=self)
-                return
             
         self.connect_btn.setEnabled(False)
         self.connect_btn.setText("连接中...")
             
         # 更新历史记录
-        original_input = self.ip_input.text().strip()
-        if original_input in self.ip_history:
-            self.ip_history.remove(original_input)
-        self.ip_history.insert(0, original_input)
+        if ip in self.ip_history:
+            self.ip_history.remove(ip)
+        self.ip_history.insert(0, ip)
         self.ip_history = self.ip_history[:10] # 最多保存10条
         save_history(self.ip_history)
         
         # 更新下拉框
         self.ip_input.clear()
         self.ip_input.addItems(self.ip_history)
-        self.ip_input.setText(original_input)
+        self.ip_input.setText(ip)
         
         self.network.host = ip
-        self.network.port = port
         self.network.start()
         
     def on_share_ip_clicked(self):
